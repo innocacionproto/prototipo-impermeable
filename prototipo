@@ -1,0 +1,176 @@
+# -*- coding: utf-8 -*-
+"""
+PROTOTIPO SIMULADO - Sistema de deteccion temprana de filtraciones
+I+E III - INACAP La Serena | Diego Gonzalez, Johan Espinoza, Fernando Cortes
+Simula un sensor IoT de humedad en el entretecho que alerta al telefono/comite.
+NO usa hardware: los datos de humedad se generan por software (simulacion).
+"""
+import time, random
+from datetime import datetime
+import streamlit as st
+import plotly.graph_objects as go
+
+# ----------------- Configuracion general -----------------
+st.set_page_config(page_title="Detección temprana de filtraciones",
+                   page_icon="🏠", layout="wide")
+ROJO = "#C8102E"; VERDE = "#5E8B4C"; AMBAR = "#E08A1E"; AZUL = "#3B6FB0"; GRIS = "#6E6E6E"
+UMBRAL_ALERTA = 70
+UMBRAL_PRECAUCION = 50
+
+# ----------------- Estado inicial -----------------
+if "casas" not in st.session_state:
+    st.session_state.casas = {
+        "Casa 1 · Rosa Muñoz":      35.0,
+        "Casa 2 · Margarita López": 42.0,
+        "Casa 3 · Patricia Rojas":  28.0,
+    }
+    st.session_state.hist = {c: [v] for c, v in st.session_state.casas.items()}
+    st.session_state.eventos = []
+    st.session_state.auto = False
+    st.session_state.n_alertas = 0
+    st.session_state.alertadas = set()  # casas ya contadas en alerta
+
+def estado_de(h):
+    if h >= UMBRAL_ALERTA:     return "ALERTA", ROJO
+    if h >= UMBRAL_PRECAUCION: return "Precaución", AMBAR
+    return "Normal", VERDE
+
+def registrar(casa, h, estado):
+    hora = datetime.now().strftime("%H:%M:%S")
+    st.session_state.eventos.insert(0, (hora, casa, f"{h:.0f}%", estado))
+    st.session_state.eventos = st.session_state.eventos[:12]
+
+# ----------------- Encabezado -----------------
+st.markdown(
+    f"<div style='background:{ROJO};padding:14px 20px;border-radius:10px'>"
+    f"<span style='color:white;font-size:26px;font-weight:bold'>🏠 Sistema de detección temprana de filtraciones</span><br>"
+    f"<span style='color:#ffd7dc;font-size:15px'>Prototipo simulado · I+E III · INACAP La Serena — "
+    f"Diego, Johan y Fernando</span></div>", unsafe_allow_html=True)
+st.caption("Un \"sistema inmunológico para la vivienda\": detecta la humedad apenas entra el agua y avisa a tiempo. "
+           "Esta es una simulación por software (sin hardware).")
+
+with st.expander("ℹ️ ¿Cómo funciona? (para explicarlo en la presentación)"):
+    st.markdown(
+        "1. **El sensor** mide la humedad dentro del techo (entretecho).\n"
+        "2. **Manda el dato por internet** (WiFi o red tipo LoRa) al sistema.\n"
+        "3. Si la humedad **pasa el 70%**, llega una **alerta al celular** de la familia y del comité.\n"
+        "4. Así pueden **reparar a tiempo**, antes de que el agua dañe el techo.\n\n"
+        "*En esta demo el dato del sensor se genera por software para poder mostrarlo sin equipo físico.*")
+
+# ----------------- Barra lateral (controles) -----------------
+with st.sidebar:
+    st.header("🎛️ Controles de la demo")
+    st.write("Usa estos botones para mostrarlo en vivo.")
+    casa_sel = st.selectbox("Casa a intervenir", list(st.session_state.casas.keys()))
+    c1, c2 = st.columns(2)
+    if c1.button("🌧️ Simular lluvia", use_container_width=True):
+        st.session_state.casas[casa_sel] = min(100, st.session_state.casas[casa_sel] + 18)
+    if c2.button("☀️ Ventilar / secar", use_container_width=True):
+        st.session_state.casas[casa_sel] = max(0, st.session_state.casas[casa_sel] - 15)
+    st.divider()
+    st.session_state.auto = st.toggle("▶️ Modo automático (lluvia gradual)", value=st.session_state.auto)
+    st.caption(f"Umbral de alerta: {UMBRAL_ALERTA}% de humedad.")
+    if st.button("🔄 Reiniciar simulación", use_container_width=True):
+        for c in st.session_state.casas: st.session_state.casas[c] = 30.0
+        st.session_state.hist = {c: [30.0] for c in st.session_state.casas}
+        st.session_state.eventos = []
+        st.session_state.n_alertas = 0
+        st.session_state.alertadas = set()
+
+# ----------------- Modo automatico: sube humedad sola -----------------
+if st.session_state.auto:
+    for c in st.session_state.casas:
+        st.session_state.casas[c] = min(100, st.session_state.casas[c] + random.uniform(1.5, 5.0))
+
+# ----------------- Actualizar historial y contador de alertas -----------------
+for c, h in st.session_state.casas.items():
+    st.session_state.hist[c].append(h)
+    st.session_state.hist[c] = st.session_state.hist[c][-40:]  # ultimas 40 lecturas
+    if h >= UMBRAL_ALERTA and c not in st.session_state.alertadas:
+        st.session_state.n_alertas += 1
+        st.session_state.alertadas.add(c)
+    if h < UMBRAL_ALERTA and c in st.session_state.alertadas:
+        st.session_state.alertadas.discard(c)
+
+# ----------------- Resumen arriba -----------------
+m1, m2, m3 = st.columns(3)
+prom = sum(st.session_state.casas.values()) / len(st.session_state.casas)
+m1.metric("Casas monitoreadas", len(st.session_state.casas))
+m2.metric("Humedad promedio", f"{prom:.0f}%")
+m3.metric("Alertas detectadas hoy", st.session_state.n_alertas)
+
+# ----------------- Panel principal: medidores -----------------
+st.subheader("📡 Lectura de los sensores (entretecho)")
+cols = st.columns(len(st.session_state.casas))
+hay_alerta = False
+for col, (casa, h) in zip(cols, st.session_state.casas.items()):
+    estado, color = estado_de(h)
+    if estado == "ALERTA": hay_alerta = True
+    with col:
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number", value=h,
+            number={"suffix": "%", "font": {"size": 32}},
+            gauge={"axis": {"range": [0, 100]},
+                   "bar": {"color": color},
+                   "steps": [{"range": [0, UMBRAL_PRECAUCION], "color": "#E9F1E4"},
+                             {"range": [UMBRAL_PRECAUCION, UMBRAL_ALERTA], "color": "#FBE2BF"},
+                             {"range": [UMBRAL_ALERTA, 100], "color": "#F6D5D9"}],
+                   "threshold": {"line": {"color": ROJO, "width": 4}, "value": UMBRAL_ALERTA}}))
+        fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=0))
+        st.markdown(f"**{casa}**")
+        st.plotly_chart(fig, use_container_width=True, key="g_"+casa)
+        st.markdown(f"<div style='text-align:center;color:{color};font-weight:bold;font-size:18px'>{estado}</div>",
+                    unsafe_allow_html=True)
+        registrar(casa, h, estado)
+
+# ----------------- Grafico de humedad en el tiempo -----------------
+st.subheader("📈 Humedad en el tiempo")
+figl = go.Figure()
+colores = [ROJO, AZUL, VERDE]
+for (casa, serie), col in zip(st.session_state.hist.items(), colores):
+    figl.add_trace(go.Scatter(y=serie, mode="lines", name=casa, line=dict(color=col, width=3)))
+figl.add_hline(y=UMBRAL_ALERTA, line_dash="dash", line_color=ROJO,
+               annotation_text="Umbral de alerta (70%)", annotation_position="top left")
+figl.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
+                   yaxis=dict(range=[0, 100], title="Humedad %"),
+                   xaxis=dict(title="Lecturas"), legend=dict(orientation="h", y=-0.2))
+st.plotly_chart(figl, use_container_width=True)
+
+# ----------------- Notificacion tipo telefono -----------------
+st.subheader("📱 Alerta al teléfono")
+if hay_alerta:
+    casas_alerta = [c for c, v in st.session_state.casas.items() if v >= UMBRAL_ALERTA]
+    cuerpo = (f"<b>🔔 ¡Filtración detectada!</b><br>"
+              f"Humedad alta en:<br>{'<br>'.join('• '+c for c in casas_alerta)}<br><br>"
+              f"<span style='font-size:12px'>Revisar el techo y aplicar el kit antes de que avance el daño.</span>")
+    fondo = ROJO
+else:
+    cuerpo = ("<b>✅ Todo en orden</b><br><br>"
+              "<span style='font-size:12px'>Ningún techo supera el umbral de humedad.</span>")
+    fondo = VERDE
+st.markdown(
+    f"<div style='width:260px;border:10px solid #222;border-radius:30px;padding:0;background:#222'>"
+    f"<div style='height:18px'></div>"
+    f"<div style='background:{fondo};color:white;margin:6px;padding:16px;border-radius:18px;min-height:120px'>{cuerpo}</div>"
+    f"<div style='text-align:center;color:#888;font-size:22px'>◯</div></div>",
+    unsafe_allow_html=True)
+
+# ----------------- Registro de eventos -----------------
+st.subheader("📋 Registro del comité (últimas lecturas)")
+if st.session_state.eventos:
+    st.dataframe(
+        {"Hora": [e[0] for e in st.session_state.eventos],
+         "Casa": [e[1] for e in st.session_state.eventos],
+         "Humedad": [e[2] for e in st.session_state.eventos],
+         "Estado": [e[3] for e in st.session_state.eventos]},
+        use_container_width=True, hide_index=True)
+else:
+    st.info("Aún no hay lecturas. Usa 'Simular lluvia' o activa el modo automático.")
+
+# ----------------- Loop del modo automatico -----------------
+if st.session_state.auto:
+    time.sleep(1.2)
+    st.rerun()
+
+streamlit==1.39.0
+plotly==5.24.1
