@@ -1,2 +1,2 @@
-streamlit
-plotly
+streamlit>=1.48,<2
+plotly>=5.20,<7
